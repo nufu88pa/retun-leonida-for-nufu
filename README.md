@@ -248,6 +248,8 @@ read and the licence limits on it.
 
 ## Want to help?
 
+Contributions are welcome. [Read the contribution guide](CONTRIBUTING.md), [report an issue](https://github.com/nufu88pa/retun-leonida-for-nufu/issues/new/choose), or [fork the repository](https://github.com/nufu88pa/retun-leonida-for-nufu/fork) to open a pull request against `main`.
+
 The biggest open pieces:
 
 - **Shader translator on hardware**: compute, mesh and geometry now translate (see the translator contract in

@@ -12,17 +12,11 @@ Thanks for helping. A few rules keep the project safe to host:
 
 ## Before you start
 
-Claim the work in [the coordination issue][claims] first: the open issue titled "Coordinating who works on what" (it
-moves to a new issue when the thread gets long, so the link searches for it). Check its tables and the open pull
-requests, post `claiming: <ID>` there (or a one-line description for something not listed yet), and put the ID in
-your pull request. Found something that needs doing but won't do it yourself? Post `finding: <one line>` there, with
-where it is and why it matters, and it goes on the list for others. When two pull requests overlap anyway, the one
-that lands first is merged and the other is asked to rebase or close. GPU test results go in
-[#166](https://github.com/ItsNotRexed/Leonida/issues/166). Work on the D3D12 → Vulkan layer has its own page,
-[#313](https://github.com/ItsNotRexed/Leonida/issues/313): the critical path, who builds what, and which D3D12
-methods are still open.
+Anyone with a GitHub account can [open an issue](https://github.com/nufu88pa/retun-leonida-for-nufu/issues/new/choose) or propose a pull request. Documentation, independent reviews and tests with synthetic inputs are welcome.
 
-[claims]: https://github.com/ItsNotRexed/Leonida/issues?q=is%3Aissue%20is%3Aopen%20in%3Atitle%20%22Coordinating%20who%20works%20on%20what%22
+1. Check the [coordination issue](https://github.com/nufu88pa/retun-leonida-for-nufu/issues?q=is%3Aissue+is%3Aopen+in%3Atitle+%22Coordinating+who+works+on+what%22) and [open pull requests](https://github.com/nufu88pa/retun-leonida-for-nufu/pulls) for overlapping work. If you plan to take a task, post `claiming: <ID>` or a one-line description in the coordination issue. Small fixes can link to the relevant issue or explain the change in the pull request.
+2. [Fork this repository](https://github.com/nufu88pa/retun-leonida-for-nufu/fork), branch from `main` and commit your changes to your fork.
+3. Open a pull request against this repository's `main`. Link the issue or claim, describe what changed, and list the checks you actually ran. State whether the work was AI-assisted. For GPU reports, include the tested commit, OS, GPU, driver, and results using synthetic inputs when possible.
 
 ## Working on the code
 
