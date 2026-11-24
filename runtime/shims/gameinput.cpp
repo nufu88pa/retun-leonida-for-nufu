@@ -2669,5 +2669,6 @@ void set_hid_backend(const HidBackend* backend) { g_hid = backend ? backend : &k
 
 SHIM_TABLE(gameinput,
     {"gameinput.dll", "GameInputCreate", reinterpret_cast<void*>(&GameInputCreate)},
+    {"gameinput.dll", "#1", reinterpret_cast<void*>(&GameInputCreate)},
     {"xgameruntime.dll", "GameInputCreate", reinterpret_cast<void*>(&GameInputCreate)},
 );

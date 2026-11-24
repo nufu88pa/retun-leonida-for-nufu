@@ -6,6 +6,7 @@ every controller SDL supports works the way an Xbox pad would: DualSense, DualSh
 rest of SDL's controller database. On a DualSense the impulse-trigger rumble becomes adaptive-trigger effects, and
 the lightbar colour can be set.
 
+The shim serves `GameInputCreate` by name and as ordinal 1 in `GameInput.dll`.
 Without the shim the loader would bind `GameInputCreate` to the host's `GameInput.dll` if there is one
 ([#279](https://github.com/ItsNotRexed/Leonida/pull/279)). That works for Xbox pads only, and gives no DualSense
 features. That path is tested without the game: `gameinput_host_test` (ctest `gameinput_host`) maps a synthetic DLL
