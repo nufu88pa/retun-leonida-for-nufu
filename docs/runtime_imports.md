@@ -182,6 +182,22 @@ which opens none.
 
 ## Console paths and the write overlay
 
+### Flat XError exports
+
+The shim registry serves `XErrorReport`, `XErrorSetCallback` and `XErrorSetOptions`
+through `GetProcAddress("xgameruntime.dll", ...)` as well as through `IXErrorImpl`.
+Both paths share the existing error callback and context. Reporting keeps the
+existing offline logging and callback behavior; the wrappers add no new error
+option semantics. This fixes a startup failure when the runtime-library thunk
+requires the flat report export before querying its runtime interfaces.
+`xgameruntime_test` checks export resolution, callback delivery in both directions,
+callback removal, and a null report message using synthetic inputs.
+
+The callback and option signatures follow Microsoft's
+[XErrorSetCallback](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xerror/functions/xerrorsetcallback)
+and [XErrorSetOptions](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xerror/functions/xerrorsetoptions)
+documentation; the report signature and behavior reuse `IXErrorImpl` above.
+
 A title's file calls name the console's drives, so `GAME:\data\x.sps` is a file inside the installed game folder.
 [ivall/xcl](https://github.com/ivall/xcl) (GPL-2.0-only; facts only, no code) documents for Xbox Series GDK titles that
 `GAME:` maps to the game folder and that writes go to a writable overlay instead of the package, which stays read-only.

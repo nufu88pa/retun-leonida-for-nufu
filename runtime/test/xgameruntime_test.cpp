@@ -433,6 +433,26 @@ void check_run_time_load() {
         const HRESULT reported = reinterpret_cast<Report>(slot(e, 3))(e, E_FAIL, "offline test");
         check(reported == S_OK && seen.hr == E_FAIL && std::strcmp(seen.msg, "offline test") == 0,
               "slot 3 is XErrorReport and reaches the callback slot 4 (XErrorSetCallback) set");
+        using FlatReport = HRESULT(WINAPI*)(HRESULT, const char*);
+        using FlatSetCallback = void(WINAPI*)(Callback, void*);
+        using FlatSetOptions = void(WINAPI*)(uint32_t, uint32_t);
+        auto flat_report = reinterpret_cast<FlatReport>(rt::shims::find("xgameruntime.dll", "XErrorReport"));
+        auto flat_callback = reinterpret_cast<FlatSetCallback>(rt::shims::find("xgameruntime.dll", "XErrorSetCallback"));
+        auto flat_options = reinterpret_cast<FlatSetOptions>(rt::shims::find("xgameruntime.dll", "XErrorSetOptions"));
+        check(flat_report && flat_callback && flat_options, "flat XError exports resolve through the shim registry");
+        if (flat_report && flat_callback && flat_options) {
+            check(flat_report(E_INVALIDARG, "flat report") == S_OK && seen.hr == E_INVALIDARG &&
+                      std::strcmp(seen.msg, "flat report") == 0,
+                  "flat report reaches the COM-installed callback");
+            flat_callback(on_error, &seen);
+            reinterpret_cast<Report>(slot(e, 3))(e, E_ABORT, "COM report");
+            check(seen.hr == E_ABORT && std::strcmp(seen.msg, "COM report") == 0,
+                  "COM report reaches the flat-installed callback");
+            flat_callback(nullptr, nullptr);
+            flat_report(E_FAIL, nullptr);
+            check(seen.hr == E_ABORT, "flat callback removal and null report message are supported");
+            flat_options(0, 0);
+        }
         reinterpret_cast<SetCallback>(slot(e, 4))(e, nullptr, nullptr);
         using SetOptions = void(STDMETHODCALLTYPE*)(void*, uint32_t, uint32_t);  // void, per Microsoft's page
         reinterpret_cast<SetOptions>(slot(e, 5))(e, 0x01, 0x00);  // OutputDebugStringOnError / None

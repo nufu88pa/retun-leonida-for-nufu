@@ -256,6 +256,18 @@ void STDMETHODCALLTYPE error_set_callback(void*, XErrorCallback callback, void* 
 // void XErrorSetOptions(XErrorOptions, XErrorOptions), as Microsoft documents it: nothing to configure offline.
 void STDMETHODCALLTYPE error_set_options(void*, uint32_t, uint32_t) {}
 
+// The runtime library also resolves the flat exports with GetProcAddress before
+// querying IXErrorImpl. Keep both entry paths on the same callback state.
+HRESULT WINAPI XErrorReport(HRESULT hr, const char* message) {
+    return error_report(nullptr, hr, message);
+}
+void WINAPI XErrorSetCallback(XErrorCallback callback, void* context) {
+    error_set_callback(nullptr, callback, context);
+}
+void WINAPI XErrorSetOptions(uint32_t debugger_present, uint32_t debugger_absent) {
+    error_set_options(nullptr, debugger_present, debugger_absent);
+}
+
 const void* const kErrorVtable[] = {
     reinterpret_cast<const void*>(&object_query_interface), reinterpret_cast<const void*>(&object_add_ref),
     reinterpret_cast<const void*>(&object_release),
@@ -1324,6 +1336,9 @@ SHIM_TABLE(xgameruntime,
     XGR(InitializeApiImplEx2),
     XGR(UninitializeApiImpl),
     XGR(QueryApiImpl),
+    XGR(XErrorReport),
+    XGR(XErrorSetCallback),
+    XGR(XErrorSetOptions),
     // the same runtime through gameplatformservices.dll, which XCurl.dll loads from System32 (GetApiVersionImpl above)
     {"gameplatformservices.dll", "QueryApiImpl", reinterpret_cast<void*>(&QueryApiImpl)},
     {"gameplatformservices.dll", "GetApiVersionImpl", reinterpret_cast<void*>(&GetApiVersionImpl)},
