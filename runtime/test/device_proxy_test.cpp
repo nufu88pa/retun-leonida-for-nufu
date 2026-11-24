@@ -178,6 +178,33 @@ int main(int argc, char** argv) {
     check(rt::d3d12_xs::device_slot_hits(1) == 1 && rt::d3d12_xs::device_slot_hits(2) == 1,
           "slots 1 and 2 count the calls after the first read");
 
+    using XboxHeapProperties = D3D12_HEAP_PROPERTIES*(WINAPI*)(D3D12_HEAP_PROPERTIES*, ID3D12Device*, UINT,
+                                                              D3D12_HEAP_TYPE);
+    const auto xbox_properties = reinterpret_cast<XboxHeapProperties>(proxy_vtbl[26]);
+    const auto expected = real->GetCustomHeapProperties(0, D3D12_HEAP_TYPE_UPLOAD);
+    const auto pc = device->GetCustomHeapProperties(0, D3D12_HEAP_TYPE_UPLOAD);
+    D3D12_HEAP_PROPERTIES xbox{};
+    auto matches = [&](const D3D12_HEAP_PROPERTIES& properties) {
+        return properties.Type == expected.Type && properties.CPUPageProperty == expected.CPUPageProperty &&
+               properties.MemoryPoolPreference == expected.MemoryPoolPreference &&
+               properties.CreationNodeMask == expected.CreationNodeMask &&
+               properties.VisibleNodeMask == expected.VisibleNodeMask;
+    };
+    check(matches(pc), "slot 26 preserves PC GetCustomHeapProperties");
+    check(xbox_properties(&xbox, device.Get(), 0, D3D12_HEAP_TYPE_UPLOAD) == &xbox && matches(xbox),
+          "slot 26 supports the Xbox return-buffer-first convention");
+    using XboxCreateQueue = HRESULT(WINAPI*)(ID3D12Device*, const D3D12_COMMAND_QUEUE_DESC*, REFIID, void**);
+    const auto xbox_create_queue = reinterpret_cast<XboxCreateQueue>(proxy_vtbl[48]);
+    D3D12_COMMAND_QUEUE_DESC xbox_desc{};
+    xbox_desc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
+    xbox_desc.Flags = static_cast<D3D12_COMMAND_QUEUE_FLAGS>(2);
+    ComPtr<ID3D12CommandQueue> xbox_queue;
+    const HRESULT xbox_hr = xbox_create_queue(device.Get(), &xbox_desc, IID_PPV_ARGS(xbox_queue.GetAddressOf()));
+    check(SUCCEEDED(xbox_hr) && xbox_queue && rt::d3d12_xs::is_queue_proxy(xbox_queue.Get()) &&
+              xbox_queue->GetDesc().Flags == D3D12_COMMAND_QUEUE_FLAG_NONE &&
+              static_cast<unsigned>(xbox_desc.Flags) == 2,
+          "slot 48 strips console-only queue flags without changing the input descriptor");
+    xbox_queue.Reset();
     rt::d3d12_xs::reset_device_proxy_stats();
 
     // QI/refcount behaviour: device interfaces resolve to the same proxy, non-device IIDs do not.

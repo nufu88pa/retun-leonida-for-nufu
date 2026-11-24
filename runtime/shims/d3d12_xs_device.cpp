@@ -128,6 +128,7 @@ const char* slot_name(unsigned slot) {
         case 14: return "CreateDescriptorHeap";
         case 16: return "CreateRootSignature";
         case 25: return "GetResourceAllocationInfo";
+        case 26: return "GetCustomHeapProperties";
         case 27: return "CreateCommittedResource (PC slot 27)";
         case 31: return "CreateSharedHandle (proxies unwrapped)";
         case 32: return "OpenSharedHandle (a fence comes back wrapped)";
@@ -1513,6 +1514,19 @@ std::uint64_t WINAPI proxy_slot(DeviceProxy* self, std::uint64_t a1, std::uint64
         return hr_to_u64(proxy_create_descriptor_heap(
             self, reinterpret_cast<const D3D12_DESCRIPTOR_HEAP_DESC*>(a1),
             reinterpret_cast<const IID*>(a2), reinterpret_cast<void**>(a3)));
+    } else if constexpr (Slot == 26) {
+        note_slot(Slot);
+        // The Xbox executable puts the result buffer before this. PC callers
+        // put it after this. Call the host method using its typed declaration.
+        auto* result = reinterpret_cast<D3D12_HEAP_PROPERTIES*>(a1);
+        if (!is_device_proxy(self)) {
+            result = reinterpret_cast<D3D12_HEAP_PROPERTIES*>(self);
+            self = reinterpret_cast<DeviceProxy*>(a1);
+            if (!is_device_proxy(self)) return 0;
+        }
+        if (!result) return 0;
+        *result = self->real->GetCustomHeapProperties(static_cast<UINT>(a2), static_cast<D3D12_HEAP_TYPE>(a3));
+        return reinterpret_cast<std::uint64_t>(result);
     } else if constexpr (Slot == 62) {
         return hr_to_u64(proxy_create_compute_pipeline_state(
             self, reinterpret_cast<const D3D12_COMPUTE_PIPELINE_STATE_DESC*>(a1), a2, a3,
@@ -1549,7 +1563,15 @@ std::uint64_t WINAPI proxy_slot(DeviceProxy* self, std::uint64_t a1, std::uint64
         }
         if (Slot == routes.queue_x) {
             log_xbox_route_once(Slot, "CreateCommandQueueX", a1, a2, a3, a4, a5);
-            return hr_to_u64(proxy_create_command_queue(self, reinterpret_cast<const D3D12_COMMAND_QUEUE_DESC*>(a1),
+            if (!a1)
+                return hr_to_u64(proxy_create_command_queue(self, nullptr, reinterpret_cast<const IID*>(a2),
+                                                            reinterpret_cast<void**>(a3)));
+            // The Xbox descriptor begins with the PC prefix, but its flags
+            // include console-only bits. Preserve the shared timeout flag.
+            auto desc = *reinterpret_cast<const D3D12_COMMAND_QUEUE_DESC*>(a1);
+            desc.Flags = static_cast<D3D12_COMMAND_QUEUE_FLAGS>(
+                static_cast<unsigned>(desc.Flags) & D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT);
+            return hr_to_u64(proxy_create_command_queue(self, &desc,
                                                         reinterpret_cast<const IID*>(a2),
                                                         reinterpret_cast<void**>(a3)));
         }
@@ -1704,7 +1726,7 @@ ID3D12Device* device_proxy_real_device(const void* device) {
 }
 
 bool device_slot_overridden(unsigned slot) {
-    if (slot <= 2 || slot == 8 || slot == 9 || slot == 14 || slot == 31 || slot == 32 || slot == 34 || slot == 35 ||
+    if (slot <= 2 || slot == 8 || slot == 9 || slot == 14 || slot == 26 || slot == 31 || slot == 32 || slot == 34 || slot == 35 ||
         slot == 36 || slot == 45 || slot == 46 || slot == 50 || slot == 62 || slot == 67 ||
         slot == 75 || slot == 76)
         return true;
