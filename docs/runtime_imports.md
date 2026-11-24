@@ -196,6 +196,17 @@ The callback and option signatures follow Microsoft's
 and [XErrorSetOptions](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xerror/functions/xerrorsetoptions)
 documentation; the report signature and behavior reuse `IXErrorImpl` above.
 
+## Xbox DirectStorage startup
+
+`XCRDAPI.dll!DStorageGetFactory` supplies the Xbox interface requested at
+startup. The factory implements COM identity and lifetime, `OpenFile` at slot
+4, and `SetStagingBufferSize` at slot 8. Files open for shared read access
+through the runtime's console path mapping and overlay. Each file object
+owns its original handle and can open a separate handle for the caller.
+The staging buffer defaults to 32 MiB and follows the sizes documented in
+Microsoft's [DirectStorage overview](https://learn.microsoft.com/en-us/xbox/gdk/docs/features/console/storage/directstorage/directstorage-overview).
+Queue, request and status methods still need implementation.
+
 ## Console paths and the write overlay
 
 A title's file calls name the console's drives, so `GAME:\data\x.sps` is a file inside the installed game folder.

@@ -112,6 +112,7 @@ if(WIN32 AND LEONIDA_BUILD_WINDOWS_RUNTIME)
     shims/registry.cpp
     shims/file_system.cpp
     shims/winhttp_offline.cpp
+    shims/dstorage_xs.cpp
     shims/xmem.cpp
     shims/d3d12_xs.cpp
     shims/d3d12_xs_device.cpp
@@ -1130,6 +1131,10 @@ if(BUILD_TESTING)
       "-DLOADER=$<TARGET_FILE:gta6rt>" "-DGUEST=$<TARGET_FILE:tiny_atexit>"
       "-DRUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}" -P "${CMAKE_CURRENT_SOURCE_DIR}/test/check_atexit.cmake")
     add_test(NAME run_tiny_game COMMAND gta6rt --run $<TARGET_FILE:tiny_game> -- hello 42)
+    add_executable(dstorage_xs_test test/dstorage_xs_test.cpp shims/dstorage_xs.cpp shims/file_system.cpp shims/registry.cpp)
+    target_include_directories(dstorage_xs_test PRIVATE shims)
+    target_compile_definitions(dstorage_xs_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    add_test(NAME dstorage_xs COMMAND dstorage_xs_test)
     add_test(NAME run_tiny_game_console_paths COMMAND ${CMAKE_COMMAND}
       "-DLOADER=$<TARGET_FILE:gta6rt>" "-DGUEST=$<TARGET_FILE:tiny_game>"
       "-DRUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}" -P "${CMAKE_CURRENT_SOURCE_DIR}/test/check_console_paths.cmake")
