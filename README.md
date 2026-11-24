@@ -1,6 +1,10 @@
 # Retun Leonida for Nufu
 
-Unofficial source continuation maintained by `nufu88pa`, based on Leonida by ItsNotRexed and contributors, snapshot `dde82f27e994337094afc476ded0b1426f6e87e2`. Snapshot prepared November 24, 2026. The third-party logo was omitted and the checkout instructions now point to this repository. Original credits and license notices are retained below. No game binaries or game data are distributed here. The game does not currently boot.
+<p align="center">
+  <img src="assets/logo.png" alt="Grand Theft Auto VI fan icon by SlyDevil" width="200">
+</p>
+
+Unofficial source continuation maintained by `nufu88pa`, based on Leonida by ItsNotRexed and contributors, snapshot `dde82f27e994337094afc476ded0b1426f6e87e2`. Snapshot prepared November 24, 2026. The checkout instructions point to this repository. The fan icon is credited below. Original credits and license notices are retained below. No game binaries or game data are distributed here. The game does not currently boot.
 
 <p align="center">
   <a href="docs/i18n/README.md">Other languages</a> |
