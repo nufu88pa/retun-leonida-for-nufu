@@ -180,9 +180,7 @@ functions from `ws2_32.dll` (23 by ordinal, plus `getaddrinfo` and `freeaddrinfo
 host's, so a `--run` can open real sockets: run it with the network off. `winhttp.dll` is served by the offline shim,
 which opens none.
 
-## Console paths and the write overlay
-
-### Flat XError exports
+## Flat XError exports
 
 The shim registry serves `XErrorReport`, `XErrorSetCallback` and `XErrorSetOptions`
 through `GetProcAddress("xgameruntime.dll", ...)` as well as through `IXErrorImpl`.
@@ -197,6 +195,8 @@ The callback and option signatures follow Microsoft's
 [XErrorSetCallback](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xerror/functions/xerrorsetcallback)
 and [XErrorSetOptions](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xerror/functions/xerrorsetoptions)
 documentation; the report signature and behavior reuse `IXErrorImpl` above.
+
+## Console paths and the write overlay
 
 A title's file calls name the console's drives, so `GAME:\data\x.sps` is a file inside the installed game folder.
 [ivall/xcl](https://github.com/ivall/xcl) (GPL-2.0-only; facts only, no code) documents for Xbox Series GDK titles that
