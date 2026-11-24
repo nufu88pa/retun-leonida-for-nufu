@@ -5,8 +5,8 @@
 // a committed render target, a clear, a copy into a readback buffer, Signal and a fence wait, Map, and a check of
 // every pixel. It then returns from main with the device, the queue and the fence still alive, as a title's exit
 // does. With LEONIDA_D3D12=vulkan (check_tiny_frame.py sets it) that device is the Vulkan-backed one, so this is the
-// loader, the game thread, the Xbox-ABI proxies and the Vulkan device in one process. Hand-written test code, public
-// D3D12 API only; no game data and no shader.
+// loader, the game thread, the Xbox-ABI proxies and the Vulkan device in one process. Hand-written test code,
+// no game data and no shader.
 #include <windows.h>
 #include <d3d12.h>
 
@@ -36,6 +36,9 @@ int finish() {
 // Descriptor-heap slot 9 on the console returns the handle in RAX (docs/d3d12_vulkan.md section 7); the PC header's
 // GetCPUDescriptorHandleForHeapStart returns it through a hidden pointer, which the heap proxy does not serve.
 using HeapStartFn = std::uint64_t(__stdcall*)(void* heap);
+using CreateListX = HRESULT(WINAPI*)(void*, const UINT*, ID3D12CommandAllocator*, ID3D12PipelineState*,
+                                     REFIID, void**);
+constexpr GUID kXboxList{0xc3827890, 0x4024, 0x474c, {0x98, 0xcf, 0x64, 0x5b, 0x51, 0xdc, 0x48, 0x74}};
 
 constexpr UINT kWidth = 8, kHeight = 4;
 
@@ -63,9 +66,17 @@ int main() {
     check(SUCCEEDED(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))) && queue, "a direct command queue");
     check(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) &&
               allocator, "a command allocator");
-    if (allocator)
-        check(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr,
-                                                  IID_PPV_ARGS(&list))) && list, "a command list");
+    if (allocator) {
+        const UINT list_desc[4] = {D3D12_COMMAND_LIST_TYPE_DIRECT, 2};
+        const auto create_list = reinterpret_cast<CreateListX>((*reinterpret_cast<void***>(device))[73]);
+        check(SUCCEEDED(create_list(device, list_desc, allocator, nullptr, kXboxList,
+                                    reinterpret_cast<void**>(&list))) && list, "a command list through slot 73");
+        if (list) {
+            void* same = nullptr;
+            check(list->QueryInterface(kXboxList, &same) == S_OK && same == list, "the list retains the Xbox IID");
+            if (same) static_cast<IUnknown*>(same)->Release();
+        }
+    }
     check(SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) && fence, "a fence");
 
     ID3D12DescriptorHeap* rtv_heap = nullptr;
@@ -157,6 +168,8 @@ int main() {
 
     // What a frame owns is released; the device, the queue and the fence stay alive across the return from main, so
     // the run ends through the CRT's exit with the layer still up.
+    if (check(SUCCEEDED(list->Reset(allocator, nullptr)), "the Xbox list resets with its proxy allocator"))
+        check(SUCCEEDED(list->Close()), "the reset list closes");
     readback->Release();
     target->Release();
     rtv_heap->Release();

@@ -11,7 +11,8 @@
 //             D3D12_COMMAND_QUEUE_DESC's (public HLE).
 //   slot 73   CreateCommandListX(desc, allocator, initialState, riid, out) -> PC CreateCommandList(0, type, allocator,
 //             initialState, riid, out). The type is the first word of the Xbox desc; there is no node-mask argument
-//             in the console call (public HLE; the PC six-argument form differs).
+//             in the console call (public HLE; the PC six-argument form differs). The Vulkan backend accepts the
+//             observed Xbox list IID for creation and the shared list methods. The Xbox-only tail is not modelled.
 //   slots 78/79/80  SetFrameIntervalX, ScheduleFrameEventX, WaitFrameEventX. A per-device token state machine answers
 //             them before the PC vtable is indexed; WaitFrameEventX returns at once with a fresh non-zero token.
 //             Slot 80 is outside a PC ID3D12Device11 table, so it is checked before the beyond-table refusal.

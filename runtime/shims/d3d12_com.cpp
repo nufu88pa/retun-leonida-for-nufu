@@ -184,10 +184,19 @@ class GraphicsCommandList final
 public:
     // {2f8a7c33-91d4-4b6e-8e05-6d3f1a9b2c47}
     static constexpr GUID kTag{0x2f8a7c33, 0x91d4, 0x4b6e, {0x8e, 0x05, 0x6d, 0x3f, 0x1a, 0x9b, 0x2c, 0x47}};
-    explicit GraphicsCommandList(D3D12_COMMAND_LIST_TYPE type) : type_(type) {}
+    // IID passed to CreateCommandListX by the Xbox executable. Only lists
+    // created for this IID advertise it; the PC interface remains available.
+    static constexpr GUID kXboxIid{0xc3827890, 0x4024, 0x474c, {0x98, 0xcf, 0x64, 0x5b, 0x51, 0xdc, 0x48, 0x74}};
+    explicit GraphicsCommandList(D3D12_COMMAND_LIST_TYPE type, bool xbox) : type_(type), xbox_(xbox) {}
     ~GraphicsCommandList() override {
         stop_recording();
         release_held();
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
+        if (xbox_ && riid == kXboxIid)
+            return Child::QueryInterface(__uuidof(ID3D12GraphicsCommandList), out);
+        return Child::QueryInterface(riid, out);
     }
 
     // While open, the list holds a reference to the allocator it records into and marks it busy.
@@ -224,6 +233,9 @@ public:
 
     HRESULT STDMETHODCALLTYPE Reset(ID3D12CommandAllocator* allocator, ID3D12PipelineState* state) override {
         constexpr auto method = "ID3D12GraphicsCommandList::Reset";
+        if (xbox_) {
+            if (auto* real = d3d12_xs::allocator_proxy_real_allocator(allocator)) allocator = real;
+        }
         CommandAllocator* command_allocator = CommandAllocator::from(allocator);
         if (!command_allocator || command_allocator->type() != type_)
             return d3d12_trace::result(method, E_INVALIDARG);
@@ -1175,6 +1187,7 @@ private:
     }
 
     D3D12_COMMAND_LIST_TYPE type_;
+    bool xbox_;
     CommandAllocator* allocator_ = nullptr;  // referenced while the list is open
     leonida::CommandList list_;
     bool invalid_ = false;
@@ -1887,7 +1900,7 @@ HRESULT create_command_list(D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator
     if (type != D3D12_COMMAND_LIST_TYPE_DIRECT && type != D3D12_COMMAND_LIST_TYPE_BUNDLE &&
         type != D3D12_COMMAND_LIST_TYPE_COMPUTE && type != D3D12_COMMAND_LIST_TYPE_COPY)
         stub("create_command_list(non-direct type)");
-    auto* object = new GraphicsCommandList(type);  // created open, as D3D12 does
+    auto* object = new GraphicsCommandList(type, riid == GraphicsCommandList::kXboxIid);
     object->record_into(command_allocator);
     object->attach_device(device);
     const HRESULT hr = hand_out(object, riid, out);  // releases the creation reference, so a failure frees the list
