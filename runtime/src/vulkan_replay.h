@@ -94,6 +94,8 @@ struct ResourceBinding {
     bool sampled = false;              // has SAMPLED usage (no DENY_SHADER_RESOURCE): the present compose pass reads it
     bool host_readable = false;        // D3D12_HEAP_TYPE_READBACK (or CUSTOM write-back): needs host-read flush
     bool sparse_buffer = false;
+    // Optional CPU-authoritative source for a mirrored explicit buffer copy.
+    bool (*snapshot_copy_source)(std::uint64_t address, void* bytes, std::size_t size) = nullptr;
 };
 
 struct VulkanAccess {
@@ -989,6 +991,7 @@ struct Prepared {
     ResourceBinding source;                   // copies: the source resource
     VkImageSubresourceRange source_range{};   // copies: the source subresources (range: the destination's)
     std::vector<VkBufferCopy> buffer_copies;
+    std::vector<std::uint32_t> copy_source_words;
     std::vector<VkBufferImageCopy> buffer_image_copies;  // one direction, given by which side is an image
     VkBuffer tile_scratch = VK_NULL_HANDLE;            // CopyTiles with a byte-unaligned linear buffer offset
     std::vector<VkBufferCopy> tile_rows;
@@ -2723,6 +2726,9 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
             const ResourceBinding* source = resolve(src_id);
             if (!bind(dst_id) || !source) return ReplayResult::unresolved_resource;
             p.source = *source;
+            if (p.binding.snapshot_copy_source ||
+                (p.source.snapshot_copy_source && !std::holds_alternative<CopyBuffer>(command)))
+                return ReplayResult::unsupported;
             ReplayResult result = ReplayResult::success;
             if (const auto* buffer_copy = std::get_if<CopyBuffer>(&command)) {
                 const auto size = [&](const ResourceBinding& binding, ResourceId id) {
@@ -2742,6 +2748,17 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
                     return ReplayResult::invalid_copy;
                 if (p.source.buffer == p.binding.buffer && src < dst + buffer_copy->size && dst < src + buffer_copy->size)
                     return ReplayResult::invalid_copy;
+                if (p.source.snapshot_copy_source) {
+                    constexpr VkDeviceSize snapshot_limit = 4 * 1024 * 1024;
+                    if (predicated || !vk.update_buffer || !vk.pipeline_barrier ||
+                        (src & 3) || (buffer_copy->size & 3) || buffer_copy->size > snapshot_limit ||
+                        buffer_copy->src_offset > UINT64_MAX - p.source.va)
+                        return ReplayResult::unsupported;
+                    p.copy_source_words.resize(std::size_t(buffer_copy->size / 4));
+                    if (!p.source.snapshot_copy_source(p.source.va + buffer_copy->src_offset, p.copy_source_words.data(),
+                                                       std::size_t(buffer_copy->size)))
+                        return ReplayResult::invalid_copy;
+                }
                 if (predicated) {
                     if ((statistics_active && !statistics_helpers) || !vk.prepare_predicated_copy || !vk.emit_predicated_copy ||
                         !vk.prepare_predicated_copy(p.source.buffer, p.binding.buffer, src, dst, buffer_copy->size, p.predicated_copy))
@@ -3641,6 +3658,21 @@ inline void emit(const PreparedList& prepared, VkCommandBuffer command_buffer, c
                 vk.emit_predicated_copy(command_buffer, p.predicated_copy);
                 begin_statistics();
             } else if (!p.buffer_copies.empty()) {
+                if (p.source.snapshot_copy_source) {
+                    detail::memory_barrier(vk, command_buffer, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                           VK_PIPELINE_STAGE_TRANSFER_BIT);
+                    constexpr std::size_t words_per_update = 65536 / sizeof(std::uint32_t);
+                    for (std::size_t start = 0; start < p.copy_source_words.size(); start += words_per_update) {
+                        const auto words = std::min(words_per_update, p.copy_source_words.size() - start);
+                        vk.update_buffer(command_buffer, p.source.buffer,
+                                         p.buffer_copies.front().srcOffset + start * sizeof(std::uint32_t),
+                                         words * sizeof(std::uint32_t), p.copy_source_words.data() + start);
+                    }
+                    detail::memory_barrier(vk, command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                                           VK_PIPELINE_STAGE_TRANSFER_BIT);
+                }
                 vk.copy_buffer(command_buffer, p.source.buffer, p.binding.buffer, std::uint32_t(p.buffer_copies.size()),
                                p.buffer_copies.data());
             } else if (p.staged) {

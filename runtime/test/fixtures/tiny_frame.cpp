@@ -209,6 +209,58 @@ int main() {
         }
         if (placed_buffer) placed_buffer->Release();
     }
+    if (GetEnvironmentVariableW(L"LEONIDA_TEST_XMEM_MIRROR", nullptr, 0) != 0) {
+        using Reserve = void*(WINAPI*)(void*, SIZE_T, DWORD, UINT64, DWORD);
+        using Allocate = BOOL(WINAPI*)(UINT64, UINT64*, UINT64*);
+        using Map = void*(WINAPI*)(void*, UINT64, const UINT64*);
+        using Free = BOOL(WINAPI*)(UINT64, const UINT64*);
+        HMODULE xmem = LoadLibraryW(L"xmem.dll");
+        const auto reserve = reinterpret_cast<Reserve>(GetProcAddress(xmem, "XMemVirtualAlloc"));
+        const auto allocate = reinterpret_cast<Allocate>(GetProcAddress(xmem, "XMemAllocatePhysicalPages"));
+        const auto map = reinterpret_cast<Map>(GetProcAddress(xmem, "XMemMapPhysicalPages"));
+        const auto free_pages = reinterpret_cast<Free>(GetProcAddress(xmem, "XMemFreePhysicalPages"));
+        if (check(reserve && allocate && map && free_pages, "XMem page APIs resolve")) {
+            constexpr DWORD console_page_reserve = MEM_RESERVE | 0x20400000;
+            auto* window = static_cast<UINT*>(reserve(nullptr, 65536, console_page_reserve, 0x23, PAGE_READWRITE));
+            UINT64 pages[2]{}, count = 2;
+            if (check(window && allocate(0x280, &count, pages) && count == 2, "allocate two XMem pages")) {
+                ID3D12Resource* mirror = nullptr;
+                auto desc = buffer_desc;
+                desc.Width = 65536;
+                const auto create = reinterpret_cast<CreatePlacedX>((*reinterpret_cast<void***>(device))[133]);
+                if (check(map(window, 1, pages) == window &&
+                          SUCCEEDED(create(device, reinterpret_cast<UINT64>(window), &desc, UINT_MAX, nullptr,
+                                           IID_PPV_ARGS(&mirror))) && mirror, "slot 133 accepts the XMem window")) {
+                    for (UINT i = 0; i < 2; ++i) {
+                        if (!check(map(window, 1, pages + i) == window, "map an XMem page at the same address")) break;
+                        if (!check(SUCCEEDED(list->Reset(allocator, nullptr)), "reset the XMem copy list")) break;
+                        list->CopyBufferRegion(readback, 0, mirror, 0, sizeof(UINT));
+                        if (!check(SUCCEEDED(list->Close()), "close the XMem copy list")) break;
+                        const UINT expected = 0x70124563u + i;
+                        *window = expected;  // deliberately write after recording and closing the list
+                        queue->ExecuteCommandLists(1, lists);
+                        HANDLE completed = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                        const UINT64 ticket = 3 + i;
+                        const bool ready = completed && SUCCEEDED(queue->Signal(fence, ticket)) &&
+                            SUCCEEDED(fence->SetEventOnCompletion(ticket, completed)) &&
+                            WaitForSingleObject(completed, 30000) == WAIT_OBJECT_0;
+                        if (completed) CloseHandle(completed);
+                        if (!check(ready, "XMem copy completes")) break;
+                        void* value = nullptr;
+                        if (check(SUCCEEDED(readback->Map(0, nullptr, &value)) && value, "map XMem readback")) {
+                            check(*static_cast<const UINT*>(value) == expected, "GPU reads the current XMem page");
+                            readback->Unmap(0, nullptr);
+                        }
+                    }
+                    mirror->Release();
+                }
+                map(window, 1, nullptr);
+                free_pages(2, pages);
+            }
+            if (window) VirtualFree(window, 0, MEM_RELEASE);
+        }
+        if (xmem) FreeLibrary(xmem);
+    }
     readback->Release();
     target->Release();
     rtv_heap->Release();

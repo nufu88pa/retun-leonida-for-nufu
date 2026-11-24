@@ -102,6 +102,18 @@ physical pages. It requires a different backing strategy. The GTX 1050
 tested here does not advertise Vulkan buffer import for
 `HOST_MAPPED_FOREIGN_MEMORY`, even with sparse binding enabled.
 
+With `LEONIDA_XS_XMEM_MIRROR=1`, a placed buffer starting on a readable
+mapped page can be used as a CPU-authoritative source for an aligned
+`CopyBufferRegion` of up to 4 MiB. Replay snapshots the requested range
+when preparing the submission and uploads it with transfer commands. The
+caller must synchronize CPU writes and remapping with submission and order
+copies from the same mirror when using multiple queues. This
+experiment covers buffer copies from the mirror. Shader access, GPU writes
+back to the XMem pages, and other copy forms are outside the experiment.
+Run `run_tiny_frame` with both `LEONIDA_XS_XMEM_MIRROR=1` and
+`LEONIDA_TEST_XMEM_MIRROR=1` to check two physical pages mapped at the same
+address, with each CPU write made after its command list has closed.
+
 The proxy's slot table must also be longer than the title's highest slot. A shorter table leaves a null pointer,
 not an `E_NOTIMPL`.
 

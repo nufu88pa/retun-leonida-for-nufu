@@ -1761,14 +1761,15 @@ public:
     // Default-heap buffers are ranges of the GPU address arena: console VA = offset, zeroed through the arena's host
     // mapping. Upload and readback buffers keep their own host memory; with buffer device addresses their console
     // VA is their device address minus heap_base, so a shader's heap_base + VA still lands on them (section 3.3).
-    HRESULT create_buffer(D3D12_RESOURCE_STATES initial_state = D3D12_RESOURCE_STATE_COMMON) {
+    HRESULT create_buffer(D3D12_RESOURCE_STATES initial_state = D3D12_RESOURCE_STATE_COMMON,
+                          UINT64 copy_source_address = 0) {
         auto& vk = device_.context->vk;
         // A buffer has at least one byte, and its size must survive alignment to 64 KiB without wrapping.
         if (!desc_.Width || desc_.Width > ~UINT64(0) - D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT) return E_INVALIDARG;
         const bool host = cpu_visible();
         leonida::ResourceBinding binding{};  // a buffer: no image
         binding.size = desc_.Width;
-        if (!host && device_.arena.mapped) {
+        if (!host && !copy_source_address && device_.arena.mapped) {
             if (!device_.arena_allocate(desc_.Width, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT, arena_offset_,
                                         DeviceState::arena_buffer)) {
                 log_once("GPU address arena full (raise LEONIDA_ARENA_MB); buffer size in KiB:",
@@ -1875,11 +1876,20 @@ public:
         binding.host_readable = (heap_.Type == D3D12_HEAP_TYPE_READBACK ||
                                  (heap_.Type == D3D12_HEAP_TYPE_CUSTOM &&
                                   heap_.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_BACK));
+        if (copy_source_address) {
+            va_ = copy_source_address;
+            binding.snapshot_copy_source = [](std::uint64_t address, void* out, std::size_t count) {
+                if (!count) return true;
+                SIZE_T read = 0;
+                return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), out, count,
+                                         &read) && read == count;
+            };
+        }
         binding.va = va_;
         device_.context->add_resource(id(), binding);
         // Committed resources start zeroed unless the heap says otherwise; the host cannot reach device-local memory,
         // so the next submission fills it (D3D-71).
-        if (!host && !(heap_flags_ & D3D12_HEAP_FLAG_CREATE_NOT_ZEROED))
+        if (!host && !copy_source_address && !(heap_flags_ & D3D12_HEAP_FLAG_CREATE_NOT_ZEROED))
             device_.context->zero_on_next_submit(id(), buffer_);
         return S_OK;
     }
@@ -1938,8 +1948,9 @@ public:
         if (!VirtualQuery(pointer, &region, sizeof(region)) || region.State != MEM_COMMIT ||
             region.Type != MEM_PRIVATE || region.Protect != PAGE_READWRITE ||
             size > region.RegionSize - (address - reinterpret_cast<UINT64>(region.BaseAddress))) {
-            std::fprintf(stderr, "[rt] d3d12: placed buffer requires a committed writable host allocation (state=%#lx, type=%#lx)\n",
-                         region.State, region.Type);
+            std::fprintf(stderr, "[rt] d3d12: placed buffer requires a committed writable host allocation "
+                                 "(state=%#lx, type=%#lx, protect=%#lx)\n",
+                         region.State, region.Type, region.Protect);
             return E_NOTIMPL;
         }
         VkMemoryHostPointerPropertiesEXT memory_types{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
@@ -6659,7 +6670,19 @@ public:
         auto* resource = new (std::nothrow) Resource(state_, normalized, heap, D3D12_HEAP_FLAG_NONE);
         if (!resource) return E_OUTOFMEMORY;
         resource->attach_device(identity());
-        const HRESULT hr = resource->create_host_placed_buffer(address);
+        MEMORY_BASIC_INFORMATION region{};
+        wchar_t mirror[2]{};
+        const bool copy_source = GetEnvironmentVariableW(L"LEONIDA_XS_XMEM_MIRROR", mirror, 2) == 1 &&
+            mirror[0] == L'1' && VirtualQuery(reinterpret_cast<void*>(address), &region, sizeof(region)) &&
+            region.State == MEM_COMMIT && region.Type == MEM_MAPPED && !(region.Protect & PAGE_GUARD) &&
+            ((region.Protect & 0xff) == PAGE_READWRITE || (region.Protect & 0xff) == PAGE_READONLY);
+        // This is a diagnostic CPU-to-GPU path for aligned CopyBufferRegion sources.
+        // It does not make shader-address or GPU-to-CPU writes coherent.
+        const HRESULT hr = copy_source ? resource->create_buffer(D3D12_RESOURCE_STATE_COMMON, address)
+                                       : resource->create_host_placed_buffer(address);
+        if (copy_source)
+            std::fprintf(stderr, "[rt] d3d12: experimental XMem copy-source mirror %s\n",
+                         SUCCEEDED(hr) ? "created" : "failed");
         if (FAILED(hr)) {
             resource->Release();
             return hr;
