@@ -13,6 +13,8 @@
 //             initialState, riid, out). The type is the first word of the Xbox desc; there is no node-mask argument
 //             in the console call (public HLE; the PC six-argument form differs). The Vulkan backend accepts the
 //             observed Xbox list IID for creation and the shared list methods. The Xbox-only tail is not modelled.
+//   slot 133  CreatePlacedResourceX(va, desc, state, clear, riid, out), with an optional backend provider for
+//             buffers backed by one committed host allocation.
 //   slots 78/79/80  SetFrameIntervalX, ScheduleFrameEventX, WaitFrameEventX. A per-device token state machine answers
 //             them before the PC vtable is indexed; WaitFrameEventX returns at once with a fresh non-zero token.
 //             Slot 80 is outside a PC ID3D12Device11 table, so it is checked before the beyond-table refusal.
@@ -53,6 +55,10 @@
 #include <cstdint>
 
 namespace rt::d3d12_xs {
+
+using PlacedBufferProvider = HRESULT (*)(ID3D12Device*, UINT64, const D3D12_RESOURCE_DESC*, UINT,
+                                          const D3D12_CLEAR_VALUE*, REFIID, void**);
+void set_placed_buffer_provider(void* device, PlacedBufferProvider provider);
 
 // Wraps `real` and returns the requested device interface through `out`. Takes ownership of one reference to
 // `real` on success; on failure the caller keeps its reference. Returns E_NOINTERFACE if `riid` is not a D3D12

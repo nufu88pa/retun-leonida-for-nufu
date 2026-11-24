@@ -44,7 +44,7 @@
 namespace rt::d3d12_xs {
 namespace {
 
-constexpr unsigned kMaxSlots = 128;
+constexpr unsigned kMaxSlots = 192;
 static_assert(kMaxSlots > 83, "the proxy table must cover ID3D12Device14 (83 slots)");
 static_assert(sizeof(void*) == 8, "the Xbox-ABI proxy is x64-only");
 static_assert(sizeof(D3D12_CPU_DESCRIPTOR_HANDLE) == 8,
@@ -60,6 +60,7 @@ struct DeviceProxy {
     // The device's IDXGIDevice1 (see "IDXGIDevice1 on the device" below): a title's IDXGIDevice1* points here.
     void** dxgi_vtable;
     DxgiAdapterProvider adapter_provider;
+    PlacedBufferProvider placed_buffer_provider = nullptr;
     std::atomic<int> gpu_thread_priority;
     std::atomic<unsigned> max_frame_latency;
     // The first-frame subset of SetFrameIntervalX/ScheduleFrameEventX/WaitFrameEventX. Tokens were never measured;
@@ -148,6 +149,7 @@ const char* slot_name(unsigned slot) {
         case 78: return "Xbox SetFrameIntervalX";
         case 79: return "Xbox ScheduleFrameEventX";
         case 80: return "Xbox WaitFrameEventX";
+        case 133: return "Xbox CreatePlacedResourceX";
         default: return "forwarded";
     }
 }
@@ -1535,6 +1537,16 @@ std::uint64_t WINAPI proxy_slot(DeviceProxy* self, std::uint64_t a1, std::uint64
         return hr_to_u64(proxy_create_compute_pipeline_from_native_code(
             self, reinterpret_cast<const void*>(a1), reinterpret_cast<const IID*>(a2),
             reinterpret_cast<void**>(a3)));
+    } else if constexpr (Slot == 133) {
+        note_slot(Slot);
+        auto** out = reinterpret_cast<void**>(a6);
+        if (!out) return hr_to_u64(E_POINTER);
+        *out = nullptr;
+        if (!a5) return hr_to_u64(E_POINTER);
+        if (!self->placed_buffer_provider) return hr_to_u64(E_NOTIMPL);
+        return hr_to_u64(self->placed_buffer_provider(self->real, a1,
+            reinterpret_cast<const D3D12_RESOURCE_DESC*>(a2), static_cast<UINT>(a3),
+            reinterpret_cast<const D3D12_CLEAR_VALUE*>(a4), *reinterpret_cast<const IID*>(a5), out));
     } else if constexpr (Slot == 76) {
         return hr_to_u64(proxy_create_resource(
             self, reinterpret_cast<const D3D12_HEAP_PROPERTIES*>(a1),
@@ -1706,6 +1718,11 @@ bool set_device_adapter_provider(void* device, DxgiAdapterProvider provider) {
     return true;
 }
 
+void set_placed_buffer_provider(void* device, PlacedBufferProvider provider) {
+    if (auto* proxy = static_cast<DeviceProxy*>(device_proxy_primary(device)))
+        proxy->placed_buffer_provider = provider;
+}
+
 bool is_heap_proxy(const void* heap) {
     return heap && *reinterpret_cast<void* const*>(heap) == reinterpret_cast<void*>(get_heap_vtable());
 }
@@ -1728,7 +1745,7 @@ ID3D12Device* device_proxy_real_device(const void* device) {
 bool device_slot_overridden(unsigned slot) {
     if (slot <= 2 || slot == 8 || slot == 9 || slot == 14 || slot == 26 || slot == 31 || slot == 32 || slot == 34 || slot == 35 ||
         slot == 36 || slot == 45 || slot == 46 || slot == 50 || slot == 62 || slot == 67 ||
-        slot == 75 || slot == 76)
+        slot == 75 || slot == 76 || slot == 133)
         return true;
     const XboxDeviceSlotRoutes& routes = xbox_device_slot_routes();
     return slot == routes.frame_interval || slot == routes.schedule_event || slot == routes.wait_event ||

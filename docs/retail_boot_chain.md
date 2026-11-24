@@ -93,6 +93,15 @@ DEFAULT-heap buffer from the desc, with `Flags` limited to the PC bits and `D3D1
 not tied to the VA, so what the title writes there doesn't reach the GPU. A real implementation needs the page
 mapper (#5378) or an imported host allocation.
 
+The Vulkan backend can now import one committed, writable host allocation.
+The caller must keep the allocation valid until the Vulkan buffer is retired.
+The opt-in check `LEONIDA_TEST_HOST_PLACEMENT=1` in `run_tiny_frame` writes
+after import and verifies that a Vulkan copy reads those bytes. The case
+observed in the retail run uses separate `MapViewOfFile3` views for its
+physical pages. It requires a different backing strategy. The GTX 1050
+tested here does not advertise Vulkan buffer import for
+`HOST_MAPPED_FOREIGN_MEMORY`, even with sparse binding enabled.
+
 The proxy's slot table must also be longer than the title's highest slot. A shorter table leaves a null pointer,
 not an `E_NOTIMPL`.
 

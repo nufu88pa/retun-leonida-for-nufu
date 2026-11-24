@@ -1884,6 +1884,92 @@ public:
         return S_OK;
     }
 
+    HRESULT create_host_placed_buffer(UINT64 address) {
+        const auto& info = device_.info;
+        if (!info.external_memory_host) return E_NOTIMPL;
+        auto load = [&](const char* name) { return info.get_instance_proc(info.instance, name); };
+        const auto properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+            load("vkGetPhysicalDeviceProperties2"));
+        const auto external = reinterpret_cast<PFN_vkGetPhysicalDeviceExternalBufferProperties>(
+            load("vkGetPhysicalDeviceExternalBufferProperties"));
+        const auto get_device = reinterpret_cast<PFN_vkGetDeviceProcAddr>(load("vkGetDeviceProcAddr"));
+        if (!properties2 || !external || !get_device) return E_NOTIMPL;
+        const auto pointer_properties = reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
+            get_device(info.device, "vkGetMemoryHostPointerPropertiesEXT"));
+        if (!pointer_properties) return E_NOTIMPL;
+
+        VkPhysicalDeviceExternalMemoryHostPropertiesEXT host{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &host};
+        properties2(info.physical, &properties);
+        const auto alignment = host.minImportedHostPointerAlignment;
+        if (!alignment || address % alignment) return E_INVALIDARG;
+
+        constexpr auto handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+        VkExternalMemoryBufferCreateInfo external_buffer{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+        external_buffer.handleTypes = handle_type;
+        VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, &external_buffer};
+        buffer_info.size = desc_.Width;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        if (info.buffer_device_address) buffer_info.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        device_.share(buffer_info);
+        VkPhysicalDeviceExternalBufferInfo query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
+        query.handleType = handle_type;
+        query.usage = buffer_info.usage;
+        VkExternalBufferProperties supported{VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+        external(info.physical, &query, &supported);
+        const auto features = supported.externalMemoryProperties.externalMemoryFeatures;
+        if (!(features & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) ||
+            (features & VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT)) return E_NOTIMPL;
+
+        auto& vk = device_.context->vk;
+        if (vk.vkCreateBuffer(info.device, &buffer_info, nullptr, &buffer_) != VK_SUCCESS) return E_OUTOFMEMORY;
+        VkMemoryRequirements requirements{};
+        vk.vkGetBufferMemoryRequirements(info.device, buffer_, &requirements);
+        if (requirements.size > UINT64_MAX - alignment + 1) return E_INVALIDARG;
+        const auto size = (requirements.size + alignment - 1) / alignment * alignment;
+
+        auto* pointer = reinterpret_cast<void*>(address);
+        MEMORY_BASIC_INFORMATION region{};
+        // A single writable host allocation can be imported. A reservation or
+        // a range stitched from pagefile views needs a separate sparse path.
+        if (!VirtualQuery(pointer, &region, sizeof(region)) || region.State != MEM_COMMIT ||
+            region.Type != MEM_PRIVATE || region.Protect != PAGE_READWRITE ||
+            size > region.RegionSize - (address - reinterpret_cast<UINT64>(region.BaseAddress))) {
+            std::fprintf(stderr, "[rt] d3d12: placed buffer requires a committed writable host allocation (state=%#lx, type=%#lx)\n",
+                         region.State, region.Type);
+            return E_NOTIMPL;
+        }
+        VkMemoryHostPointerPropertiesEXT memory_types{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+        if (pointer_properties(info.device, handle_type, pointer, &memory_types) != VK_SUCCESS) return E_NOTIMPL;
+        const auto mask = requirements.memoryTypeBits & memory_types.memoryTypeBits;
+        constexpr auto coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        uint32_t type = 0;
+        for (; type < device_.memory.memoryTypeCount; ++type) {
+            if ((mask & (1u << type)) && (device_.memory.memoryTypes[type].propertyFlags & coherent) == coherent) break;
+        }
+        if (type == device_.memory.memoryTypeCount) return E_NOTIMPL;
+        memory_flags_ = device_.memory.memoryTypes[type].propertyFlags;
+        VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+        flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        VkImportMemoryHostPointerInfoEXT import{VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT};
+        import.pNext = info.buffer_device_address ? &flags : nullptr;
+        import.handleType = handle_type;
+        import.pHostPointer = pointer;
+        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &import, size, type};
+        if (vk.vkAllocateMemory(info.device, &allocation, nullptr, &memory_) != VK_SUCCESS) return E_NOTIMPL;
+        if (vk.vkBindBufferMemory(info.device, buffer_, memory_, 0) != VK_SUCCESS) return E_FAIL;
+        va_ = address;
+        leonida::ResourceBinding binding{};
+        binding.buffer = buffer_;
+        binding.size = desc_.Width;
+        binding.va = va_;
+        device_.context->add_resource(id(), binding);
+        return S_OK;
+    }
+
     HRESULT create_sparse_buffer() {
         constexpr std::uint64_t tile_bytes = leonida::tile_size_in_bytes;
         if (!desc_.Width || desc_.Width > UINT64_MAX - tile_bytes ||
@@ -6556,6 +6642,31 @@ public:
         return nullptr;
     }
 
+    HRESULT create_placed_buffer_x(UINT64 address, const D3D12_RESOURCE_DESC* desc, UINT state,
+                                   const D3D12_CLEAR_VALUE* clear, REFIID riid, void** out) {
+        if (!desc || !address || (address % D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT) || clear) return E_INVALIDARG;
+        if (desc->Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) return E_NOTIMPL;
+        if (!desc->Width || address > UINT64_MAX - desc->Width || desc->Height != 1 ||
+            desc->DepthOrArraySize != 1 || desc->MipLevels != 1 || desc->SampleDesc.Count != 1 ||
+            desc->SampleDesc.Quality || desc->Format != DXGI_FORMAT_UNKNOWN ||
+            desc->Layout != D3D12_TEXTURE_LAYOUT_ROW_MAJOR) return E_INVALIDARG;
+        if (state != UINT_MAX && state != D3D12_RESOURCE_STATE_COMMON) return E_NOTIMPL;
+        auto normalized = *desc;
+        normalized.Flags = static_cast<D3D12_RESOURCE_FLAGS>(UINT(desc->Flags) &
+            (D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE));
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        auto* resource = new (std::nothrow) Resource(state_, normalized, heap, D3D12_HEAP_FLAG_NONE);
+        if (!resource) return E_OUTOFMEMORY;
+        resource->attach_device(identity());
+        const HRESULT hr = resource->create_host_placed_buffer(address);
+        if (FAILED(hr)) {
+            resource->Release();
+            return hr;
+        }
+        return hand_out(resource, riid, out);
+    }
+
     HRESULT STDMETHODCALLTYPE CreateCommittedResource(const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS heap_flags,
                                                       const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state,
                                                       const D3D12_CLEAR_VALUE* clear, REFIID riid,
@@ -8291,6 +8402,11 @@ void set_device_outer(ID3D12Device* device, IUnknown* outer) {
     // out this layer's adapter, the one create_dxgi_factory enumerates, so a title on the Vulkan device never gets
     // a host DXGI object from it.
     if (!rt::d3d12_xs::is_device_proxy(outer)) return;
+    rt::d3d12_xs::set_placed_buffer_provider(outer, [](ID3D12Device* real, UINT64 address,
+            const D3D12_RESOURCE_DESC* desc, UINT state, const D3D12_CLEAR_VALUE* clear, REFIID riid, void** out) {
+        Device* device = Device::from<Device>(real);
+        return device ? device->create_placed_buffer_x(address, desc, state, clear, riid, out) : E_NOINTERFACE;
+    });
     rt::d3d12_xs::set_device_adapter_provider(outer, [](ID3D12Device* real, REFIID riid, void** out) {
         IDXGIFactory1* factory = nullptr;
         HRESULT hr = create_dxgi_factory(real, __uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory));
@@ -9102,6 +9218,9 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     vkEnumerateDeviceExtensionProperties(info.physical, nullptr, &extension_count, nullptr);
     std::vector<VkExtensionProperties> extensions(extension_count);
     vkEnumerateDeviceExtensionProperties(info.physical, nullptr, &extension_count, extensions.data());
+    info.external_memory_host = std::any_of(extensions.begin(), extensions.end(), [](const auto& e) {
+        return std::strcmp(e.extensionName, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME) == 0;
+    });
     info.conservative_rasterization = std::any_of(extensions.begin(), extensions.end(), [](const auto& e) {
         return std::strcmp(e.extensionName, VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME) == 0;
     });
@@ -9340,6 +9459,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     if (info.vertex_attribute_divisor) device_extensions.push_back(divisor_extension);
     if (info.conditional_rendering) device_extensions.push_back(conditional_extension);
     if (info.host_image_copy) device_extensions.push_back(host_image_copy_name);
+    if (info.external_memory_host) device_extensions.push_back(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     if (info.fragment_shader_barycentric)
         device_extensions.push_back(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
     if (info.fragment_shader_interlock) device_extensions.push_back(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME);

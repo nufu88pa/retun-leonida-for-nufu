@@ -39,6 +39,8 @@ using HeapStartFn = std::uint64_t(__stdcall*)(void* heap);
 using CreateListX = HRESULT(WINAPI*)(void*, const UINT*, ID3D12CommandAllocator*, ID3D12PipelineState*,
                                      REFIID, void**);
 constexpr GUID kXboxList{0xc3827890, 0x4024, 0x474c, {0x98, 0xcf, 0x64, 0x5b, 0x51, 0xdc, 0x48, 0x74}};
+using CreatePlacedX = HRESULT(WINAPI*)(void*, UINT64, const D3D12_RESOURCE_DESC*, UINT,
+                                       const D3D12_CLEAR_VALUE*, REFIID, void**);
 
 constexpr UINT kWidth = 8, kHeight = 4;
 
@@ -168,8 +170,45 @@ int main() {
 
     // What a frame owns is released; the device, the queue and the fence stay alive across the return from main, so
     // the run ends through the CRT's exit with the layer still up.
-    if (check(SUCCEEDED(list->Reset(allocator, nullptr)), "the Xbox list resets with its proxy allocator"))
-        check(SUCCEEDED(list->Close()), "the reset list closes");
+    if (check(SUCCEEDED(list->Reset(allocator, nullptr)), "the Xbox list resets with its proxy allocator")) {
+        ID3D12Resource* placed_buffer = nullptr;
+        const bool check_host_memory = GetEnvironmentVariableW(L"LEONIDA_TEST_HOST_PLACEMENT", nullptr, 0) != 0;
+        if (check_host_memory) {
+            // The allocation must outlive the imported Vulkan memory, including deferred destruction.
+            auto* host = static_cast<UINT*>(VirtualAlloc(nullptr, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+            if (check(host != nullptr, "CPU memory allocation for slot 133")) {
+                const auto create = reinterpret_cast<CreatePlacedX>((*reinterpret_cast<void***>(device))[133]);
+                auto desc = buffer_desc;
+                desc.Width = 65536;
+                const auto address = reinterpret_cast<UINT64>(host);
+                const HRESULT placed_hr = create(device, address, &desc, UINT_MAX, nullptr, IID_PPV_ARGS(&placed_buffer));
+                if (check(SUCCEEDED(placed_hr) && placed_buffer, "slot 133 imports the original CPU allocation")) {
+                    check(placed_buffer->GetGPUVirtualAddress() == address, "slot 133 preserves the guest address");
+                    host[0] = 0x89abcdefu;  // after import, so a one-time copy during creation cannot pass
+                    list->CopyBufferRegion(readback, 0, placed_buffer, 0, sizeof(UINT));
+                } else {
+                    std::printf("tiny_frame: slot 133 hr=0x%08lx\n", static_cast<unsigned long>(placed_hr));
+                }
+            }
+        }
+        const bool closed = check(SUCCEEDED(list->Close()), "the reset list closes");
+        if (placed_buffer && closed) {
+            queue->ExecuteCommandLists(1, lists);
+            HANDLE transfer = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            const bool completed = transfer && SUCCEEDED(queue->Signal(fence, 2)) &&
+                SUCCEEDED(fence->SetEventOnCompletion(2, transfer)) &&
+                WaitForSingleObject(transfer, 30000) == WAIT_OBJECT_0;
+            if (check(completed, "the slot 133 GPU copy completes")) {
+                void* value = nullptr;
+                if (check(SUCCEEDED(readback->Map(0, nullptr, &value)) && value, "map slot 133 readback")) {
+                    check(*static_cast<const UINT*>(value) == 0x89abcdefu, "GPU reads CPU writes made after import");
+                    readback->Unmap(0, nullptr);
+                }
+            }
+            if (transfer) CloseHandle(transfer);
+        }
+        if (placed_buffer) placed_buffer->Release();
+    }
     readback->Release();
     target->Release();
     rtv_heap->Release();
