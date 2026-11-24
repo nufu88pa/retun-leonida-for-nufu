@@ -26,6 +26,13 @@ Requirements: Windows x64, Visual Studio 2022 with the C++ desktop workload. The
 Vulkan SDK; the runtime and CPU tests do not. The loader is x64-only and the PE mapper rejects any
 other machine.
 
+For executable code compiled with MSVC `/GA`, configure with
+`-DLEONIDA_FIXED_EXE_TLS=ON`. This builds a launcher that reserves TLS slot zero
+for the first mapped executable, while the runtime uses its own slot in
+`gta6rt_core.dll`. Run from the CMake build directory with both
+`gta6rt_core.dll` and `gta6rt_tls_host.dll` next to `gta6rt.exe`.
+The `run_tiny_fixed_tls` test checks TLS on the guest entry thread and a new worker.
+
 ## Dry run
 
 ```powershell

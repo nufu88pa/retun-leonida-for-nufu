@@ -101,7 +101,12 @@ if(WIN32 AND LEONIDA_BUILD_WINDOWS_RUNTIME)
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
   )
 
-  add_executable(gta6rt
+  option(LEONIDA_FIXED_EXE_TLS "Reserve static TLS slot zero for the mapped EXE" OFF)
+  set(_runtime_target gta6rt)
+  if(LEONIDA_FIXED_EXE_TLS)
+    set(_runtime_target gta6rt_core)
+  endif()
+  set(_runtime_sources
     src/main.cpp
     src/pe_loader.cpp
     shims/registry.cpp
@@ -118,9 +123,17 @@ if(WIN32 AND LEONIDA_BUILD_WINDOWS_RUNTIME)
     shims/library_loader.cpp
     shims/process.cpp
   )
+  if(LEONIDA_FIXED_EXE_TLS)
+    add_library(gta6rt_core SHARED ${_runtime_sources})
+    add_executable(gta6rt src/tls_launcher.cpp)
+    target_link_libraries(gta6rt PRIVATE gta6rt_core)
+    target_compile_definitions(gta6rt_core PRIVATE LEONIDA_FIXED_EXE_TLS)
+  else()
+    add_executable(gta6rt ${_runtime_sources})
+  endif()
   add_dependencies(gta6rt gta6rt_tls_host)
-  target_compile_definitions(gta6rt PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-  target_compile_options(gta6rt PRIVATE /W4 /permissive- /utf-8)
+  target_compile_definitions(${_runtime_target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+  target_compile_options(${_runtime_target} PRIVATE /W4 /permissive- /utf-8)
   # Static shim tables register themselves at startup; keep the linker from dropping their objects.
   # GTA6RT_HOST_BASE keeps the loader's own image off the default x64 EXE base (0x140000000), where a mapped EXE
   # without relocations wants to go. Windows moves the EXE with ASLR anyway; Wine loads it at its preferred base.
@@ -133,7 +146,7 @@ if(WIN32 AND LEONIDA_BUILD_WINDOWS_RUNTIME)
   # scripts/build_runtime.ps1.
   set(GTA6RT_STACK 8388608)
   target_link_options(gta6rt PRIVATE /OPT:NOREF ${GTA6RT_HOST_BASE} /STACK:${GTA6RT_STACK})
-  target_link_libraries(gta6rt PRIVATE gta6rt_d3d12_xs_rootsig gta6rt_xtaskqueue psapi)
+  target_link_libraries(${_runtime_target} PRIVATE gta6rt_d3d12_xs_rootsig gta6rt_xtaskqueue psapi)
 
   # Root-signature forwarding test: needs a real PC d3d12.lib to serialize the synthetic descriptors.
   # find_library searches %LIB% (a Developer Prompt), not the Windows SDK the Visual Studio generator links
@@ -396,8 +409,8 @@ if(WIN32 AND LEONIDA_BUILD_WINDOWS_RUNTIME)
     endif()
   endif()
   if(LEONIDA_SDL3 AND TARGET SDL3::SDL3-static)
-    target_sources(gta6rt PRIVATE shims/gameinput.cpp)
-    target_link_libraries(gta6rt PRIVATE SDL3::SDL3-static)
+    target_sources(${_runtime_target} PRIVATE shims/gameinput.cpp)
+    target_link_libraries(${_runtime_target} PRIVATE SDL3::SDL3-static)
 
     # GameInput through the shim registry on SDL virtual joysticks: no controller, no game data.
     add_executable(gameinput_test test/gameinput_test.cpp shims/gameinput.cpp shims/registry.cpp)
@@ -1084,6 +1097,12 @@ if(BUILD_TESTING)
     set_tests_properties(gameinput PROPERTIES DISABLED TRUE)
   endif()
   if(WIN32 AND TARGET gta6rt AND TARGET tiny_game)
+    if(LEONIDA_FIXED_EXE_TLS AND MSVC AND NOT CMAKE_CROSSCOMPILING)
+      add_executable(tiny_fixed_tls test/tiny_fixed_tls.cpp)
+      target_compile_options(tiny_fixed_tls PRIVATE /GA)
+      add_test(NAME run_tiny_fixed_tls COMMAND gta6rt --run "$<TARGET_FILE:tiny_fixed_tls>"
+               --overlay "${CMAKE_CURRENT_BINARY_DIR}/tiny_fixed_tls_overlay")
+    endif()
     if(TARGET tiny_argv_default_a AND NOT CMAKE_CROSSCOMPILING)
       find_package(Python3 COMPONENTS Interpreter QUIET)
       if(Python3_FOUND)
@@ -2765,8 +2784,8 @@ if(TARGET Vulkan::Headers)
 
     # The loader can create this device instead of the host's (D3D12XboxCreateDevice, LEONIDA_D3D12=vulkan).
     if(TARGET gta6rt)
-      target_link_libraries(gta6rt PRIVATE gta6rt_d3d12_com)
-      target_compile_definitions(gta6rt PRIVATE LEONIDA_VULKAN_DEVICE)
+      target_link_libraries(${_runtime_target} PRIVATE gta6rt_d3d12_com)
+      target_compile_definitions(${_runtime_target} PRIVATE LEONIDA_VULKAN_DEVICE)
 
       # A stand-in title that imports d3d12_xs.dll!D3D12XboxCreateDevice and runs a clear and a readback on the
       # device it gets, mapped and run by `gta6rt --run` with LEONIDA_D3D12=vulkan: the loader, the game thread, the
@@ -2837,7 +2856,7 @@ if(TARGET Vulkan::Headers)
           message(FATAL_ERROR "LEONIDA_GUEST_SCENE requires static SDL3; configure SDL3_DIR or LEONIDA_SDL3_FETCH")
         endif()
         target_compile_definitions(tiny_guest_draw PRIVATE LEONIDA_GUEST_SCENE)
-        target_sources(gta6rt PRIVATE test/scene_input_driver.cpp)
+        target_sources(${_runtime_target} PRIVATE test/scene_input_driver.cpp)
       endif()
       # This guest can use a synthetic fixture produced on another machine. Register the automated test
       # if the tools to generate the fixture are available locally.

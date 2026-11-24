@@ -1427,6 +1427,21 @@ void Loader::initialize_tls(Module& m) {
             throw std::runtime_error(m.name + ": gta6rt_tls_host.dll is missing or has no module TLS index");
         if (index >= kMaxModuleTlsSlots) throw std::runtime_error(m.name + ": reserved TLS index is out of range");
 
+#ifdef LEONIDA_FIXED_EXE_TLS
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(m.base);
+        const auto* nt = at<IMAGE_NT_HEADERS64>(m.base, dos->e_lfanew);
+        if (slot == 0 && !(nt->FileHeader.Characteristics & IMAGE_FILE_DLL)) {
+            using GetIndex = DWORD (*)();
+            const auto get_index = reinterpret_cast<GetIndex>(
+                GetProcAddress(GetModuleHandleW(nullptr), "gta6rt_launcher_tls_index"));
+            if (!get_index || get_index() != 0)
+                throw std::runtime_error(m.name + ": the launcher did not reserve TLS index zero");
+            // The helper still delivers thread notifications. The launcher's
+            // unused anchor supplies the slot, and teardown restores its block.
+            index = 0;
+        }
+#endif
+
         // The fields are complete before a thread event can see the owner.
         ExclusiveTlsLock lock;
         Module* expected = nullptr;
